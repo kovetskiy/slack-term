@@ -2,8 +2,12 @@ package handlers
 
 import (
 	"fmt"
+	"io/ioutil"
+	"log"
 	"os"
+	"os/exec"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/0xAX/notificator"
@@ -18,6 +22,8 @@ import (
 
 var scrollTimer *time.Timer
 var notifyTimer *time.Timer
+
+var eventBlocker sync.WaitGroup
 
 // actionMap binds specific action names to the function counterparts,
 // these action names can then be used to bind them to specific keys
@@ -42,6 +48,7 @@ var actionMap = map[string]func(*context.AppContext){
 	"channel-search-prev": actionSearchPrevChannels,
 	"chat-up":             actionScrollUpChat,
 	"chat-down":           actionScrollDownChat,
+	"editor":              actionEditor,
 	"help":                actionHelp,
 }
 
@@ -54,6 +61,7 @@ func RegisterEventHandlers(ctx *context.AppContext) {
 func eventHandler(ctx *context.AppContext) {
 	go func() {
 		for {
+			eventBlocker.Wait()
 			ctx.EventQueue <- termbox.PollEvent()
 		}
 	}()
@@ -246,6 +254,66 @@ func actionSend(ctx *context.AppContext) {
 		ctx.View.Channels.SetChannels(ctx.Service.ChannelsToString())
 		termui.Render(ctx.View.Channels)
 	}
+}
+
+func actionEditor(ctx *context.AppContext) {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "/bin/vim"
+	}
+
+	tempFile, err := ioutil.TempFile(os.TempDir(), "slack-term.")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	cmd := exec.Command(editor, tempFile.Name())
+
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	//cmd.Stderr = os.Stderr
+
+	eventBlocker.Add(1)
+	defer eventBlocker.Done()
+
+	err = cmd.Run()
+	if err != nil {
+		// do not send message if editor exited with non-zero exitcode
+		return
+	}
+
+	ctx.View.Refresh()
+	ctx.View.Input.Clear()
+
+	message, err := ioutil.ReadAll(tempFile)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	if len(message) == 0 {
+		return
+	}
+
+	//termbox.Flush()
+	//ctx.View.Refresh()
+	//ctx.View.Input.Clear()
+	//termbox.Flush()
+
+	// Send message
+	ctx.Service.SendMessage(
+		ctx.View.Channels.SelectedChannel,
+		string(message),
+	)
+
+	// Clear notification icon if there is any
+	ctx.Service.MarkAsRead(ctx.View.Channels.SelectedChannel)
+	ctx.View.Channels.SetChannels(ctx.Service.ChannelsToString())
+	termui.Render(ctx.View.Channels)
 }
 
 // actionSearch will search through the channels based on the users

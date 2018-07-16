@@ -85,6 +85,7 @@ func getDefaultConfig() Config {
 				"C-d":        "chat-down",
 				"n":          "channel-search-next",
 				"N":          "channel-search-prev",
+				"e":          "editor",
 				"q":          "quit",
 				"<f1>":       "help",
 			},
